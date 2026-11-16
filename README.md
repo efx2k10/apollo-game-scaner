@@ -189,11 +189,12 @@ dotnet publish src\ApolloGameScanner\ApolloGameScanner.csproj `
 Артефакты попадают в `dist/` (каталог в `.gitignore`):
 
 ```bat
-release.cmd                        :: текущая версия из .csproj, self-contained
-release.cmd 1.2.0                  :: версия 1.2.0, self-contained
+release.cmd                        :: двойной клик: сборка + GitHub Release, окно не закрывается
+release.cmd 1.2.0                  :: версия 1.2.0, только локальная сборка
+release.cmd 1.2.0 --github         :: локальная сборка + тег и GitHub Release
 release.cmd v1.2.0 --framework     :: framework-dependent (нужен Runtime 8)
-release.cmd 1.2.0 --github         :: + тег и GitHub Release через gh
 release.cmd 1.2.0 --github --yes   :: без интерактивного подтверждения
+release.cmd --local                :: только локальная сборка
 ```
 
 Результат:
@@ -209,15 +210,19 @@ dist\ApolloGameScanner-<версия>-win-x64*.zip.sha256
 
 | Флаг | Назначение |
 |---|---|
+| `--github` | создать/обновить тег `v<версия>` и GitHub Release (требуется `gh`) |
+| `--local` | только локальная сборка, без GitHub |
 | `--framework` | framework-dependent сборка (нужен .NET Desktop Runtime 8) |
 | `--self-contained` | self-contained сборка (по умолчанию) |
-| `--github` | создать/обновить тег `v<версия>` и GitHub Release (требуется `gh`) |
 | `--yes` | не спрашивать подтверждение |
 | `--allow-dirty` | разрешить релиз при незакоммиченных изменениях |
 | `-h`, `--help` | справка |
 
 Особенности:
 
+- запуск **без аргументов** (двойной клик из Проводника) включает `--github`,
+  а окно остаётся открытым после завершения — видно результат и ошибки;
+- запуск с аргументами (например, `release.cmd 1.2.0`) собирает только локально;
 - версия по умолчанию читается из `<Version>` в `ApolloGameScanner.csproj`;
 - при `--github` скрипт проверяет чистоту рабочего дерева, создаёт аннотированный
   тег, отправляет его в `origin` и вызывает `gh release create` (или

@@ -182,6 +182,50 @@ dotnet publish src\ApolloGameScanner\ApolloGameScanner.csproj `
 `settings.json` может быть запрещена — программа покажет предупреждение и
 продолжит работу без сохранения настроек (см. раздел 17).
 
+### Сборка релиза скриптом
+
+В корне репозитория лежит `release.cmd` — он собирает single-file публикацию,
+кладёт `README.md` рядом с exe, упаковывает всё в ZIP и считает SHA-256.
+Артефакты попадают в `dist/` (каталог в `.gitignore`):
+
+```bat
+release.cmd                        :: текущая версия из .csproj, self-contained
+release.cmd 1.2.0                  :: версия 1.2.0, self-contained
+release.cmd v1.2.0 --framework     :: framework-dependent (нужен Runtime 8)
+release.cmd 1.2.0 --github         :: + тег и GitHub Release через gh
+release.cmd 1.2.0 --github --yes   :: без интерактивного подтверждения
+```
+
+Результат:
+
+```
+dist\v<версия>\ApolloGameScanner.exe   (+ README.md)
+dist\ApolloGameScanner-<версия>-win-x64.zip       (self-contained)
+dist\ApolloGameScanner-<версия>-win-x64-fdd.zip   (framework-dependent)
+dist\ApolloGameScanner-<версия>-win-x64*.zip.sha256
+```
+
+Параметры:
+
+| Флаг | Назначение |
+|---|---|
+| `--framework` | framework-dependent сборка (нужен .NET Desktop Runtime 8) |
+| `--self-contained` | self-contained сборка (по умолчанию) |
+| `--github` | создать/обновить тег `v<версия>` и GitHub Release (требуется `gh`) |
+| `--yes` | не спрашивать подтверждение |
+| `--allow-dirty` | разрешить релиз при незакоммиченных изменениях |
+| `-h`, `--help` | справка |
+
+Особенности:
+
+- версия по умолчанию читается из `<Version>` в `ApolloGameScanner.csproj`;
+- при `--github` скрипт проверяет чистоту рабочего дерева, создаёт аннотированный
+  тег, отправляет его в `origin` и вызывает `gh release create` (или
+  `gh release upload --clobber`, если релиз уже существует);
+- имена переменных внутри `.cmd` не должны совпадать со свойствами MSBuild
+  (`OutDir`, `Version`, `PublishDir` и т.п.) — иначе параметры публикации
+  ломаются.
+
 ### Настройки проекта
 
 `ApolloGameScanner.csproj`:
@@ -286,6 +330,10 @@ dotnet publish src\ApolloGameScanner\ApolloGameScanner.csproj `
 D:\Projects\CS\apollo-game-scaner\
 ├─ ApolloGameScanner.sln
 ├─ README.md                          ← этот документ
+├─ release.cmd                        ← сборка и публикация релиза (dist, ZIP, SHA-256)
+├─ .gitignore                         ← bin/obj/dist/opencode.json и т.п.
+├─ .gitattributes                     ← LF/CRLF и бинарные файлы
+├─ dist\                              ← артефакты release.cmd (не коммитится)
 └─ src\ApolloGameScanner\
    ├─ ApolloGameScanner.csproj
    ├─ ApolloGameScanner.csproj.user   ← пользовательские настройки IDE (не нужен в репозитории)
@@ -1956,7 +2004,7 @@ tests\ApolloGameScanner.Tests\
 
 ### 21.1 Сборка и публикация
 
-См. раздел 3. Для релиза рекомендуется:
+См. раздел 3. Для релиза используется `release.cmd`:
 
 - `Version`, `FileVersion`, `AssemblyVersion` в csproj;
 - `PublishSingleFile` + `win-x64`;
@@ -1965,13 +2013,13 @@ tests\ApolloGameScanner.Tests\
 
 ### 21.2 Репозиторий
 
-Сейчас git-репозитория нет (`Is directory a git repo: no`). При инициализации:
+Репозиторий инициализирован (`main`), в корне лежат `.gitignore`,
+`.gitattributes` и `release.cmd`.
 
-1. `git init`.
-2. Добавить `.gitignore` (см. 18.12).
-3. Не коммитить `bin`, `obj`, `.vs`, `*.user`, `settings.json*`, `covers`,
-   `cache`, `logs`.
-4. Решить, хранить ли пример конфига (`docs/apps.example.json`) — полезно.
+- не коммитятся `bin`, `obj`, `.vs`, `*.user`, `opencode.json`, `settings.json`,
+  `covers`, `cache`, `dist`, `*.log`;
+- текстовые файлы хранятся с LF, файлы Visual Studio — с CRLF;
+- релиз: `release.cmd <версия> --github` (тег + GitHub Release).
 
 ### 21.3 Версионирование
 

@@ -246,6 +246,14 @@ if "!REL_GITHUB!"=="1" (
         set "REL_GH=gh"
     )
 
+    echo   Отправка текущей ветки в origin...
+    git -C "%APOLLO_ROOT%" push origin HEAD
+    if errorlevel 1 (
+        echo [ОШИБКА] Не удалось отправить текущую ветку в origin.
+        if defined REL_NO_ARGS pause
+        exit /b 1
+    )
+
     git -C "%APOLLO_ROOT%" rev-parse -q --verify "refs/tags/!REL_TAG!" >nul 2>&1
     if errorlevel 1 (
         git -C "%APOLLO_ROOT%" tag -a "!REL_TAG!" -m "Apollo Game Scanner !REL_TAG!"

@@ -208,8 +208,14 @@ if "!REL_GITHUB!"=="1" (
 
     where gh >nul 2>&1
     if errorlevel 1 (
-        echo [ОШИБКА] GitHub CLI ^(gh^) не найден. Установите: winget install GitHub.cli
-        exit /b 1
+        if exist "%ProgramFiles%\GitHub CLI\gh.exe" (
+            set "REL_GH=%ProgramFiles%\GitHub CLI\gh.exe"
+        ) else (
+            echo [ОШИБКА] GitHub CLI не найден. Установите: winget install GitHub.cli
+            exit /b 1
+        )
+    ) else (
+        set "REL_GH=gh"
     )
 
     git -C "%APOLLO_ROOT%" rev-parse -q --verify "refs/tags/!REL_TAG!" >nul 2>&1
@@ -227,11 +233,11 @@ if "!REL_GITHUB!"=="1" (
         exit /b 1
     )
 
-    gh release view "!REL_TAG!" -R "!REL_REPO!" >nul 2>&1
+    "!REL_GH!" release view "!REL_TAG!" -R "!REL_REPO!" >nul 2>&1
     if errorlevel 1 (
-        gh release create "!REL_TAG!" "!REL_ZIP!" "!REL_ZIP!.sha256" -R "!REL_REPO!" --title "Apollo Game Scanner !REL_TAG!" --generate-notes
+        "!REL_GH!" release create "!REL_TAG!" "!REL_ZIP!" "!REL_ZIP!.sha256" -R "!REL_REPO!" --title "Apollo Game Scanner !REL_TAG!" --generate-notes
     ) else (
-        gh release upload "!REL_TAG!" "!REL_ZIP!" "!REL_ZIP!.sha256" -R "!REL_REPO!" --clobber
+        "!REL_GH!" release upload "!REL_TAG!" "!REL_ZIP!" "!REL_ZIP!.sha256" -R "!REL_REPO!" --clobber
     )
     if errorlevel 1 (
         echo [ОШИБКА] gh не смог создать/обновить релиз !REL_TAG!.

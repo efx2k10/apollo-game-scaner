@@ -221,7 +221,8 @@ dist\ApolloGameScanner-<версия>-win-x64*.zip.sha256
 - версия по умолчанию читается из `<Version>` в `ApolloGameScanner.csproj`;
 - при `--github` скрипт проверяет чистоту рабочего дерева, создаёт аннотированный
   тег, отправляет его в `origin` и вызывает `gh release create` (или
-  `gh release upload --clobber`, если релиз уже существует);
+  `gh release upload --clobber`, если релиз уже существует); `gh` ищется в
+  `PATH`, затем в `%ProgramFiles%\GitHub CLI\gh.exe`;
 - имена переменных внутри `.cmd` не должны совпадать со свойствами MSBuild
   (`OutDir`, `Version`, `PublishDir` и т.п.) — иначе параметры публикации
   ломаются.

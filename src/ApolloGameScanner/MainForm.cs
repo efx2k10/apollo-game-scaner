@@ -11,6 +11,7 @@ public sealed class MainForm : Form
     private readonly SettingsService _settingsService = new();
     private readonly AppsConfigService _configService = new();
     private readonly CoverService _coverService;
+    private readonly UpdateService _updateService = new();
 
     private AppsConfig? _config;
     private string? _configPath;
@@ -330,8 +331,12 @@ public sealed class MainForm : Form
         settings.DropDownItems.Add(settingsItem);
 
         var help = new ToolStripMenuItem("Справка");
+        var updateItem = new ToolStripMenuItem("Проверить обновления…", null, async (_, _) => await CheckUpdatesManuallyAsync());
+        AppIcons.Apply(updateItem, IconKind.Refresh);
         var aboutItem = new ToolStripMenuItem("О программе", null, (_, _) => ShowAbout());
         AppIcons.Apply(aboutItem, IconKind.Help);
+        help.DropDownItems.Add(updateItem);
+        help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add(aboutItem);
 
         menu.Items.Add(file);
@@ -623,10 +628,105 @@ public sealed class MainForm : Form
     private void ShowAbout()
     {
         MessageBox.Show(this,
-            "Apollo Game Scanner 1.0" + Environment.NewLine + Environment.NewLine +
+            $"Apollo Game Scanner {UpdateService.CurrentVersionText}" + Environment.NewLine + Environment.NewLine +
             "Сканирует папку с играми и формирует apps.json для Apollo (Sunshine)." + Environment.NewLine +
-            "Существующие записи не перезаписываются: уже добавленные игры помечаются и открываются для правки.",
+            "Существующие записи не перезаписываются: уже добавленные игры помечаются и открываются для правки." +
+            Environment.NewLine + Environment.NewLine +
+            $"Обновления: {UpdateService.SourceUrl}",
             "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private async Task CheckUpdatesOnStartupAsync()
+    {
+        var settings = _settingsService.Settings;
+        if (!settings.CheckUpdatesOnStartup)
+        {
+            return;
+        }
+
+        if (settings.LastUpdateCheckUtc is { } last &&
+            DateTime.UtcNow - last < TimeSpan.FromHours(23))
+        {
+            return;
+        }
+
+        try
+        {
+            var update = await _updateService.GetLatestAsync(CancellationToken.None);
+
+            settings.LastUpdateCheckUtc = DateTime.UtcNow;
+            _settingsService.Save();
+
+            if (update is null || IsDisposed)
+            {
+                return;
+            }
+
+            var answer = MessageBox.Show(this,
+                $"Доступна новая версия {update.VersionText} (у вас {UpdateService.CurrentVersionText})." +
+                Environment.NewLine + Environment.NewLine +
+                "Открыть окно обновления?",
+                "Обновление", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+
+            if (answer == DialogResult.Yes)
+            {
+                ShowUpdateDialog(update);
+            }
+        }
+        catch
+        {
+            // Нет сети, лимит GitHub и т.п. — при старте не мешаем работе.
+        }
+    }
+
+    private async Task CheckUpdatesManuallyAsync()
+    {
+        try
+        {
+            var update = await _updateService.GetLatestAsync(CancellationToken.None);
+            if (update is null)
+            {
+                MessageBox.Show(this,
+                    $"Установлена последняя версия ({UpdateService.CurrentVersionText}).",
+                    "Обновления", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            ShowUpdateDialog(update);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                "Не удалось проверить обновления: " + ex.Message,
+                "Обновления", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ShowUpdateDialog(UpdateInfo update)
+    {
+        if (_configDirty)
+        {
+            var save = MessageBox.Show(this,
+                "Есть несохранённые изменения конфига. Сохранить их перед обновлением?",
+                "Обновление", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+            if (save == DialogResult.Cancel)
+            {
+                return;
+            }
+
+            if (save == DialogResult.Yes && !SaveConfig())
+            {
+                return;
+            }
+        }
+
+        using var dialog = new UpdateForm(_updateService, update);
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Applied)
+        {
+            _configDirty = false;
+            Application.Exit();
+        }
     }
 
     private bool SaveSettings()
@@ -1796,6 +1896,8 @@ public sealed class MainForm : Form
         {
             LoadConfig(_settingsService.Settings.LastConfigPath!, silent: true);
         }
+
+        Shown += async (_, _) => await CheckUpdatesOnStartupAsync();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

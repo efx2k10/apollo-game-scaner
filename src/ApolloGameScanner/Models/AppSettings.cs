@@ -18,6 +18,12 @@ public sealed class AppSettings
     /// </summary>
     public WorkingDirMode WorkingDirMode { get; set; } = WorkingDirMode.ExeFolder;
 
+    /// <summary>Проверять наличие обновлений при запуске (не чаще раза в сутки).</summary>
+    public bool CheckUpdatesOnStartup { get; set; } = true;
+
+    /// <summary>Когда последний раз проверялись обновления (UTC).</summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
+
     public static List<string> DefaultFilePatterns() => new()
     {
         "unins*",
@@ -85,6 +91,12 @@ public sealed class AppSettings
         if (!Enum.IsDefined(WorkingDirMode))
         {
             WorkingDirMode = WorkingDirMode.ExeFolder;
+        }
+
+        // Часы могли перевести вперёд — не блокируем проверки на годы.
+        if (LastUpdateCheckUtc > DateTime.UtcNow.AddDays(1))
+        {
+            LastUpdateCheckUtc = null;
         }
     }
 }

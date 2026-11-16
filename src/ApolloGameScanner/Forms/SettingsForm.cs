@@ -19,6 +19,7 @@ public sealed class SettingsForm : Form
     private readonly RadioButton _workDirGameFolder;
     private readonly RadioButton _workDirExeFolder;
     private readonly RadioButton _workDirEmpty;
+    private readonly CheckBox _checkUpdates;
 
     public SettingsForm(AppSettings settings)
     {
@@ -37,13 +38,14 @@ public sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 7,
             Padding = new Padding(10),
             AutoScroll = true,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -274,6 +276,48 @@ public sealed class SettingsForm : Form
 
         sgdbGroup.Controls.Add(sgdbTable);
 
+        // --- обновления ---
+        var updatesGroup = new GroupBox
+        {
+            Text = "Обновления",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(10, 6, 10, 8),
+            Margin = new Padding(0, 8, 0, 0),
+        };
+
+        var updatesTable = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0),
+        };
+        updatesTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        _checkUpdates = new CheckBox
+        {
+            Text = "Проверять обновления при запуске",
+            AutoSize = true,
+            Checked = settings.CheckUpdatesOnStartup,
+            Margin = new Padding(0, 2, 0, 2),
+        };
+
+        updatesTable.Controls.Add(_checkUpdates, 0, 0);
+        updatesTable.Controls.Add(new Label
+        {
+            Text = "Проверка идёт через GitHub Releases не чаще раза в сутки. " +
+                   "Обновление заменяет только exe и README.md: settings.json, обложки и кэш сохраняются. " +
+                   "Ручная проверка — «Справка → Проверить обновления…».",
+            AutoSize = true,
+            MaximumSize = new Size(700, 0),
+            ForeColor = Color.DimGray,
+            Margin = new Padding(0, 4, 0, 0),
+        }, 0, 1);
+
+        updatesGroup.Controls.Add(updatesTable);
+
         // --- рабочая папка ---
         var workDirGroup = new GroupBox
         {
@@ -377,8 +421,9 @@ public sealed class SettingsForm : Form
         root.Controls.Add(foldersGroup, 0, 1);
         root.Controls.Add(coversGroup, 0, 2);
         root.Controls.Add(sgdbGroup, 0, 3);
-        root.Controls.Add(workDirGroup, 0, 4);
-        root.Controls.Add(buttons, 0, 5);
+        root.Controls.Add(updatesGroup, 0, 4);
+        root.Controls.Add(workDirGroup, 0, 5);
+        root.Controls.Add(buttons, 0, 6);
 
         Controls.Add(root);
         AcceptButton = ok;
@@ -519,6 +564,7 @@ public sealed class SettingsForm : Form
             : _workDirEmpty.Checked
                 ? WorkingDirMode.Empty
                 : WorkingDirMode.ExeFolder;
+        _settings.CheckUpdatesOnStartup = _checkUpdates.Checked;
         _settings.Normalize();
 
         DialogResult = DialogResult.OK;

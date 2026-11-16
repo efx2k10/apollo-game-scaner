@@ -5,7 +5,6 @@
 
 Версия: **1.1.0**  
 Платформа: **Windows, .NET 8, WinForms (`net8.0-windows`)**  
-Расположение решения: `D:\Projects\CS\apollo-game-scaner`  
 Проект: `src/ApolloGameScanner/ApolloGameScanner.csproj`
 
 ---
@@ -143,8 +142,9 @@ NuGet-зависимостей нет: используются только Win
 
 ### Сборка
 
+Из корня репозитория:
+
 ```powershell
-cd D:\Projects\CS\apollo-game-scaner
 dotnet build -v q
 ```
 
@@ -364,7 +364,7 @@ dist\ApolloGameScanner-<версия>-win-x64*.zip.sha256
 ### 6.2 Карта файлов
 
 ```
-D:\Projects\CS\apollo-game-scaner\
+apollo-game-scaner\
 ├─ ApolloGameScanner.sln
 ├─ README.md                          ← этот документ
 ├─ release.cmd                        ← сборка и публикация релиза (dist, ZIP, SHA-256)

@@ -2,28 +2,40 @@ using ApolloGameScanner.Models;
 
 namespace ApolloGameScanner.Forms;
 
-/// <summary>Строка списка "Текущий конфиг".</summary>
+/// <summary>
+/// Строка списка "Текущий конфиг": активная запись или выключенная
+/// (лежащая в архиве рядом с конфигом).
+/// </summary>
 public sealed class ConfigRowControl : UserControl
 {
+    private static readonly Color DisabledBack = Color.FromArgb(243, 243, 243);
+
+    private readonly ToolTip _toolTip = new();
+
     public AppEntry Entry { get; }
     public int Index { get; }
+
+    /// <summary>Запись выключена: её нет в apps.json, она ждёт в архиве.</summary>
+    public bool IsDisabled { get; }
 
     public event EventHandler? EditRequested;
     public event EventHandler? DeleteRequested;
     public event EventHandler? MoveUpRequested;
     public event EventHandler? MoveDownRequested;
     public event EventHandler? SelectionChanged;
+    public event EventHandler? ToggleEnabledRequested;
 
-    public ConfigRowControl(AppEntry entry, int index, bool canMoveUp, bool canMoveDown)
+    public ConfigRowControl(AppEntry entry, int index, bool canMoveUp, bool canMoveDown, bool isDisabled = false)
     {
         Entry = entry;
         Index = index;
+        IsDisabled = isDisabled;
 
         AutoScaleMode = AutoScaleMode.None;
 
         Height = DpiScale.Px(64);
         Margin = DpiScale.Pad(0, 0, 0, 6);
-        BackColor = Color.White;
+        BackColor = isDisabled ? DisabledBack : Color.White;
         BorderStyle = BorderStyle.FixedSingle;
 
         var layout = new TableLayoutPanel
@@ -50,6 +62,9 @@ public sealed class ConfigRowControl : UserControl
             Entry.IsSelected = check.Checked;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         };
+        _toolTip.SetToolTip(check, isDisabled
+            ? "Отметить для пакетных действий и включения."
+            : "Отметить для пакетных действий и выключения.");
 
         var info = new TableLayoutPanel
         {
@@ -62,12 +77,15 @@ public sealed class ConfigRowControl : UserControl
         info.RowStyles.Add(new RowStyle(SizeType.Absolute, DpiScale.Px(26)));
         info.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
+        var name = string.IsNullOrWhiteSpace(entry.Name) ? "(без названия)" : entry.Name;
+
         var nameLabel = new Label
         {
-            Text = string.IsNullOrWhiteSpace(entry.Name) ? "(без названия)" : entry.Name,
+            Text = isDisabled ? "выключена · " + name : name,
             Dock = DockStyle.Fill,
             AutoEllipsis = true,
             Font = new Font(Font.FontFamily, 10f, FontStyle.Bold),
+            ForeColor = isDisabled ? Color.Gray : Color.Black,
             TextAlign = ContentAlignment.MiddleLeft,
             Margin = new Padding(0),
         };
@@ -77,7 +95,7 @@ public sealed class ConfigRowControl : UserControl
             Text = entry.DisplayCmd,
             Dock = DockStyle.Fill,
             AutoEllipsis = true,
-            ForeColor = Color.DimGray,
+            ForeColor = isDisabled ? Color.Silver : Color.DimGray,
             TextAlign = ContentAlignment.MiddleLeft,
             Margin = new Padding(0),
         };
@@ -95,21 +113,33 @@ public sealed class ConfigRowControl : UserControl
             Margin = DpiScale.Pad(4, 0, 0, 0),
         };
 
-        var up = MakeArrowButton(IconKind.Up, canMoveUp, "Переместить выше");
-        up.Click += (_, _) => MoveUpRequested?.Invoke(this, EventArgs.Empty);
+        if (!isDisabled)
+        {
+            var up = MakeArrowButton(IconKind.Up, canMoveUp, "Переместить выше");
+            up.Click += (_, _) => MoveUpRequested?.Invoke(this, EventArgs.Empty);
 
-        var down = MakeArrowButton(IconKind.Down, canMoveDown, "Переместить ниже");
-        down.Click += (_, _) => MoveDownRequested?.Invoke(this, EventArgs.Empty);
+            var down = MakeArrowButton(IconKind.Down, canMoveDown, "Переместить ниже");
+            down.Click += (_, _) => MoveDownRequested?.Invoke(this, EventArgs.Empty);
+
+            buttons.Controls.Add(up);
+            buttons.Controls.Add(down);
+        }
 
         var edit = MakeTextButton("Изменить…", IconKind.Edit);
         edit.Click += (_, _) => EditRequested?.Invoke(this, EventArgs.Empty);
+        buttons.Controls.Add(edit);
+
+        var toggle = isDisabled
+            ? MakeTextButton("Включить", IconKind.Check)
+            : MakeTextButton("Выключить", IconKind.Cancel);
+        _toolTip.SetToolTip(toggle, isDisabled
+            ? "Вернуть запись в apps.json на прежнее место."
+            : "Убрать запись из apps.json в архив рядом с конфигом.");
+        toggle.Click += (_, _) => ToggleEnabledRequested?.Invoke(this, EventArgs.Empty);
+        buttons.Controls.Add(toggle);
 
         var delete = MakeTextButton("Удалить", IconKind.Delete);
         delete.Click += (_, _) => DeleteRequested?.Invoke(this, EventArgs.Empty);
-
-        buttons.Controls.Add(up);
-        buttons.Controls.Add(down);
-        buttons.Controls.Add(edit);
         buttons.Controls.Add(delete);
 
         layout.Controls.Add(check, 0, 0);
@@ -119,7 +149,7 @@ public sealed class ConfigRowControl : UserControl
         Controls.Add(layout);
     }
 
-    private static Button MakeArrowButton(IconKind kind, bool enabled, string tooltip)
+    private Button MakeArrowButton(IconKind kind, bool enabled, string tooltip)
     {
         var button = new Button
         {
@@ -131,7 +161,7 @@ public sealed class ConfigRowControl : UserControl
             Image = AppIcons.Get(kind, DpiScale.Px(14)),
             ImageAlign = ContentAlignment.MiddleCenter,
         };
-        new ToolTip().SetToolTip(button, tooltip);
+        _toolTip.SetToolTip(button, tooltip);
         return button;
     }
 
@@ -147,5 +177,15 @@ public sealed class ConfigRowControl : UserControl
         };
         AppIcons.Apply(button, kind, 14);
         return button;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _toolTip.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }

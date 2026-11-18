@@ -10,12 +10,14 @@ public sealed class MainForm : Form
 {
     private readonly SettingsService _settingsService = new();
     private readonly AppsConfigService _configService = new();
+    private readonly DisabledAppsService _disabledAppsService = new();
     private readonly CoverService _coverService;
     private readonly UpdateService _updateService = new();
 
     private AppsConfig? _config;
     private string? _configPath;
     private List<DetectedGame> _games = new();
+    private List<DisabledApp> _disabledApps = new();
     private IReadOnlyList<ICoverProvider> _providers = Array.Empty<ICoverProvider>();
 
     private TextBox _configPathBox = null!;
@@ -36,6 +38,8 @@ public sealed class MainForm : Form
     private Button _configCoverButton = null!;
     private Button _configEditButton = null!;
     private Button _configCancelButton = null!;
+    private Button _disableConfigButton = null!;
+    private Button _enableConfigButton = null!;
 
     private CancellationTokenSource? _scanCts;
     private CancellationTokenSource? _batchCts;
@@ -396,11 +400,29 @@ public sealed class MainForm : Form
         _batchCancelButton.Click += (_, _) => _batchCts?.Cancel();
         AppIcons.Apply(_batchCancelButton, IconKind.Cancel);
 
-        var actions = new ActionRow(_batchCoverButton, _batchEditButton, _batchCancelButton);
+        var gamesSelectAll = new Button
+        {
+            Text = "Отметить все",
+            Height = 30,
+        };
+        gamesSelectAll.Click += (_, _) => SetAllGamesSelected(true);
+        AppIcons.Apply(gamesSelectAll, IconKind.SelectAll);
+
+        var gamesClearAll = new Button
+        {
+            Text = "Снять все",
+            Height = 30,
+        };
+        gamesClearAll.Click += (_, _) => SetAllGamesSelected(false);
+        AppIcons.Apply(gamesClearAll, IconKind.ClearAll);
+
+        var actions = new ActionRow(
+            _batchCoverButton, _batchEditButton, _batchCancelButton, gamesSelectAll, gamesClearAll);
 
         var hint = new Label
         {
-            Text = "Действия применяются к отмеченным; если ничего не отмечено — ко всем новым играм. " +
+            Text = "Действия применяются к отмеченным играм — новым и уже добавленным в конфиг; " +
+                   "если ничего не отмечено, будут обработаны все новые и добавленные. " +
                    "Массовая замена и очистка обложек — в «Изменить отмеченные…».",
             AutoSize = true,
             ForeColor = Color.DimGray,
@@ -470,6 +492,22 @@ public sealed class MainForm : Form
         _configCancelButton.Click += (_, _) => _batchCts?.Cancel();
         AppIcons.Apply(_configCancelButton, IconKind.Cancel);
 
+        _disableConfigButton = new Button
+        {
+            Text = "Выключить отмеченные",
+            Height = 30,
+        };
+        _disableConfigButton.Click += (_, _) => DisableSelectedConfigEntries();
+        AppIcons.Apply(_disableConfigButton, IconKind.Cancel);
+
+        _enableConfigButton = new Button
+        {
+            Text = "Включить отмеченные",
+            Height = 30,
+        };
+        _enableConfigButton.Click += (_, _) => EnableSelectedDisabledEntries();
+        AppIcons.Apply(_enableConfigButton, IconKind.Check);
+
         var selectAll = new Button
         {
             Text = "Отметить все",
@@ -495,7 +533,8 @@ public sealed class MainForm : Form
         AppIcons.Apply(addManual, IconKind.Add);
 
         var top = new ActionRow(
-            _configCoverButton, _configEditButton, _configCancelButton, selectAll, clearAll, addManual);
+            _configCoverButton, _configEditButton, _configCancelButton,
+            selectAll, clearAll, _disableConfigButton, _enableConfigButton, addManual);
 
         _configFlow = new FlowLayoutPanel
         {
@@ -753,6 +792,7 @@ public sealed class MainForm : Form
         _config = new AppsConfig();
         _configPath = null;
         _configPathBox.Text = string.Empty;
+        _disabledApps.Clear();
         _configDirty = true;
         GameMatcher.Apply(_games, _config);
         RebuildConfigRows();
@@ -774,6 +814,7 @@ public sealed class MainForm : Form
             _settingsService.Settings.LastConfigPath = _configPath;
             SaveSettings();
 
+            LoadDisabledApps();
             GameMatcher.Apply(_games, _config);
             RebuildConfigRows();
             RebuildGameRows();
@@ -782,7 +823,9 @@ public sealed class MainForm : Form
 
             if (!silent)
             {
-                _statusLabel.Text = $"Конфиг загружен: {_configPath} (записей: {_config.Apps.Count})";
+                _statusLabel.Text =
+                    $"Конфиг загружен: {_configPath} (записей: {_config.Apps.Count}" +
+                    (_disabledApps.Count > 0 ? $", выключено: {_disabledApps.Count}" : string.Empty) + ")";
             }
         }
         catch (Exception ex)
@@ -849,12 +892,31 @@ public sealed class MainForm : Form
             _settingsService.Settings.LastConfigPath = path;
             SaveSettings();
 
+            var archiveError = SaveDisabledApps(path);
+
             GameMatcher.Apply(_games, _config!);
             RebuildConfigRows();
             RebuildGameRows();
             UpdateTitle();
             UpdateStatus();
-            _statusLabel.Text = $"Сохранено: {path} (записей: {_config!.Apps.Count})";
+
+            if (archiveError is not null)
+            {
+                _statusLabel.Text =
+                    $"Сохранено: {path} (записей: {_config!.Apps.Count}), но архив выключенных игр не записан: {archiveError}";
+                MessageBox.Show(this,
+                    "Конфиг сохранён, но архив выключенных игр записать не удалось: " + archiveError +
+                    Environment.NewLine + Environment.NewLine +
+                    "Выключенные записи остались в памяти программы. Попробуйте сохранить ещё раз.",
+                    "Архив выключенных игр", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else
+            {
+                _statusLabel.Text =
+                    $"Сохранено: {path} (записей: {_config!.Apps.Count}" +
+                    (_disabledApps.Count > 0 ? $", выключено: {_disabledApps.Count}" : string.Empty) + ")";
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -864,6 +926,56 @@ public sealed class MainForm : Form
                 "Если Apollo запущен, он может удерживать файл. Закройте Apollo или используйте «Сохранить как…».",
                 "Ошибка сохранения", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
+        }
+    }
+
+    /// <summary>Читает архив выключенных записей рядом с конфигом (если он есть).</summary>
+    private void LoadDisabledApps()
+    {
+        _disabledApps.Clear();
+        if (string.IsNullOrWhiteSpace(_configPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var sidecar = DisabledAppsService.GetSidecarPath(_configPath);
+            var items = _disabledAppsService.Load(sidecar);
+
+            // Запись могла остаться в архиве после ручного возврата в apps.json — не дублируем.
+            var activeUuids = new HashSet<string>(
+                _config?.Apps.Select(app => app.Uuid).Where(uuid => !string.IsNullOrWhiteSpace(uuid)) ??
+                Enumerable.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
+
+            _disabledApps.AddRange(items.Where(item =>
+                string.IsNullOrWhiteSpace(item.Entry.Uuid) || !activeUuids.Contains(item.Entry.Uuid)));
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = "Не удалось прочитать архив выключенных игр: " + ex.Message;
+            MessageBox.Show(this,
+                "Не удалось прочитать архив выключенных игр " +
+                Path.GetFileName(DisabledAppsService.GetSidecarPath(_configPath)) + ":" +
+                Environment.NewLine + Environment.NewLine + ex.Message,
+                "Выключенные игры", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    /// <summary>Записывает архив выключенных записей. Возвращает текст ошибки или <c>null</c>.</summary>
+    private string? SaveDisabledApps(string configPath)
+    {
+        try
+        {
+            _disabledAppsService.Save(DisabledAppsService.GetSidecarPath(configPath), _disabledApps);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Конфиг уже сохранён — не откатываем его, но оставляем пометку об изменениях.
+            _configDirty = true;
+            return ex.Message;
         }
     }
 
@@ -1033,7 +1145,7 @@ public sealed class MainForm : Form
         {
             ClearControls(_configFlow);
 
-            if (_config is null || _config.Apps.Count == 0)
+            if (_config is null || (_config.Apps.Count == 0 && _disabledApps.Count == 0))
             {
                 _configFlow.Controls.Add(new Label
                 {
@@ -1058,6 +1170,34 @@ public sealed class MainForm : Form
                     row.DeleteRequested += (_, _) => DeleteConfigEntry(currentIndex);
                     row.MoveUpRequested += (_, _) => MoveConfigEntry(currentIndex, -1);
                     row.MoveDownRequested += (_, _) => MoveConfigEntry(currentIndex, 1);
+                    row.ToggleEnabledRequested += (_, _) => DisableConfigEntry(currentIndex);
+                    row.SelectionChanged += (_, _) => UpdateStatus();
+
+                    _configFlow.Controls.Add(row);
+                }
+            }
+
+            if (_disabledApps.Count > 0)
+            {
+                _configFlow.Controls.Add(new Label
+                {
+                    Text = $"Выключенные игры ({_disabledApps.Count}) — их нет в apps.json, " +
+                           "записи хранятся в " + DisabledArchiveName(),
+                    AutoSize = true,
+                    Font = new Font(Font.FontFamily, 9f, FontStyle.Bold),
+                    ForeColor = Color.DimGray,
+                    Margin = new Padding(2, _config?.Apps.Count > 0 ? 12 : 4, 0, 4),
+                });
+
+                for (var index = 0; index < _disabledApps.Count; index++)
+                {
+                    var disabled = _disabledApps[index];
+                    var row = new ConfigRowControl(disabled.Entry, index, false, false, isDisabled: true);
+                    var currentIndex = index;
+
+                    row.EditRequested += (_, _) => EditDisabledEntry(currentIndex);
+                    row.DeleteRequested += (_, _) => DeleteDisabledEntry(currentIndex);
+                    row.ToggleEnabledRequested += (_, _) => EnableDisabledEntry(currentIndex);
                     row.SelectionChanged += (_, _) => UpdateStatus();
 
                     _configFlow.Controls.Add(row);
@@ -1183,7 +1323,13 @@ public sealed class MainForm : Form
         }
 
         var coversDirectory = _coverService.GetCoversDirectory(_configPath);
-        using var dialog = new AppEditForm(game.Draft.Clone(), isNew: true, _coverService, coversDirectory,
+
+        // Для новой игры, которая раньше была выключена, показываем поля из архива.
+        var draft = game.Status == GameStatus.New && FindDisabledMatch(game) is { } disabled
+            ? disabled.Entry.Clone()
+            : game.Draft.Clone();
+
+        using var dialog = new AppEditForm(draft, isNew: true, _coverService, coversDirectory,
             _providers, _settingsService.Settings.WorkingDirMode, game.FolderPath);
         if (dialog.ShowDialog(this) != DialogResult.OK)
         {
@@ -1251,6 +1397,7 @@ public sealed class MainForm : Form
         }
 
         _config.Apps.RemoveAt(index);
+        ClearGameSelection(entry);
         MarkDirty();
         GameMatcher.Apply(_games, _config);
         RebuildConfigRows();
@@ -1274,6 +1421,240 @@ public sealed class MainForm : Form
         (_config.Apps[index], _config.Apps[target]) = (_config.Apps[target], _config.Apps[index]);
         MarkDirty();
         RebuildConfigRows();
+    }
+
+    /// <summary>Имя файла архива выключенных записей для текущего конфига.</summary>
+    private string DisabledArchiveName()
+    {
+        return string.IsNullOrWhiteSpace(_configPath)
+            ? "apps.disabled.json"
+            : Path.GetFileName(DisabledAppsService.GetSidecarPath(_configPath));
+    }
+
+    /// <summary>Убирает запись из apps.json в архив, запоминая её позицию.</summary>
+    private void DisableConfigEntry(int index)
+    {
+        if (_config is null || index < 0 || index >= _config.Apps.Count)
+        {
+            return;
+        }
+
+        var entry = _config.Apps[index];
+        entry.IsSelected = false;
+        ClearGameSelection(entry);
+        _config.Apps.RemoveAt(index);
+        _disabledApps.Add(new DisabledApp { Entry = entry, Order = index });
+
+        MarkDirty();
+        GameMatcher.Apply(_games, _config);
+        RebuildConfigRows();
+        RebuildGameRows();
+        UpdateStatus();
+        _statusLabel.Text =
+            $"Запись «{EntryName(entry)}» выключена: не сохранена в apps.json, архив — {DisabledArchiveName()}.";
+    }
+
+    /// <summary>Возвращает выключенную запись в apps.json на прежнее место.</summary>
+    private void EnableDisabledEntry(int index)
+    {
+        if (index < 0 || index >= _disabledApps.Count)
+        {
+            return;
+        }
+
+        var entry = RestoreDisabledApp(index, out var order);
+        MarkDirty();
+        GameMatcher.Apply(_games, _config);
+        RebuildConfigRows();
+        RebuildGameRows();
+        UpdateStatus();
+        _statusLabel.Text =
+            $"Запись «{EntryName(entry)}» включена обратно (позиция {order + 1}). Не забудьте сохранить конфиг.";
+    }
+
+    /// <summary>
+    /// Достаёт запись из архива и вставляет её в apps.json. Возвращает восстановленную запись.
+    /// </summary>
+    private AppEntry RestoreDisabledApp(int index, out int order)
+    {
+        _config ??= new AppsConfig();
+
+        var disabled = _disabledApps[index];
+        _disabledApps.RemoveAt(index);
+        disabled.Entry.IsSelected = false;
+
+        order = Math.Clamp(disabled.Order, 0, _config.Apps.Count);
+        _config.Apps.Insert(order, disabled.Entry);
+        return disabled.Entry;
+    }
+
+    private void DisableSelectedConfigEntries()
+    {
+        if (_config is null)
+        {
+            return;
+        }
+
+        var selected = _config.Apps
+            .Select((entry, index) => (Entry: entry, Index: index))
+            .Where(item => item.Entry.IsSelected)
+            .ToList();
+        if (selected.Count == 0)
+        {
+            MessageBox.Show(this,
+                "Отметьте записи, которые нужно выключить (убрать из apps.json в архив).",
+                "Выключение игр", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        // Удаляем с конца, чтобы сохранённые позиции оставались корректными.
+        foreach (var item in selected.OrderByDescending(item => item.Index))
+        {
+            _config.Apps.RemoveAt(item.Index);
+            item.Entry.IsSelected = false;
+            ClearGameSelection(item.Entry);
+            _disabledApps.Add(new DisabledApp { Entry = item.Entry, Order = item.Index });
+        }
+
+        MarkDirty();
+        GameMatcher.Apply(_games, _config);
+        RebuildConfigRows();
+        RebuildGameRows();
+        UpdateStatus();
+        _statusLabel.Text =
+            $"Выключено записей: {selected.Count}. Их больше нет в apps.json; архив — {DisabledArchiveName()}.";
+    }
+
+    private void EnableSelectedDisabledEntries()
+    {
+        _config ??= new AppsConfig();
+
+        var count = _disabledApps.Count(item => item.Entry.IsSelected);
+        if (count == 0)
+        {
+            MessageBox.Show(this,
+                "Отметьте выключенные записи, которые нужно вернуть в apps.json.",
+                "Включение игр", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var restored = 0;
+        for (var index = _disabledApps.Count - 1; index >= 0; index--)
+        {
+            if (!_disabledApps[index].Entry.IsSelected)
+            {
+                continue;
+            }
+
+            RestoreDisabledApp(index, out _);
+            restored++;
+        }
+
+        MarkDirty();
+        GameMatcher.Apply(_games, _config);
+        RebuildConfigRows();
+        RebuildGameRows();
+        UpdateStatus();
+        _statusLabel.Text = $"Включено обратно записей: {restored}. Не забудьте сохранить конфиг.";
+    }
+
+    private void EditDisabledEntry(int index)
+    {
+        if (index < 0 || index >= _disabledApps.Count)
+        {
+            return;
+        }
+
+        var original = _disabledApps[index].Entry;
+        var coversDirectory = _coverService.GetCoversDirectory(_configPath);
+
+        using var dialog = new AppEditForm(original.Clone(), isNew: false, _coverService, coversDirectory,
+            _providers, _settingsService.Settings.WorkingDirMode);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _disabledApps[index].Entry = dialog.Entry;
+        MarkDirty();
+        RebuildConfigRows();
+        UpdateStatus();
+    }
+
+    private void DeleteDisabledEntry(int index)
+    {
+        if (index < 0 || index >= _disabledApps.Count)
+        {
+            return;
+        }
+
+        var entry = _disabledApps[index].Entry;
+        var result = MessageBox.Show(this,
+            "Удалить выключенную запись «" + EntryName(entry) + "» из архива безвозвратно?",
+            "Удаление из архива", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (result != DialogResult.Yes)
+        {
+            return;
+        }
+
+        _disabledApps.RemoveAt(index);
+        MarkDirty();
+        RebuildConfigRows();
+        UpdateStatus();
+    }
+
+    private static string EntryName(AppEntry entry)
+    {
+        return string.IsNullOrWhiteSpace(entry.Name) ? "(без названия)" : entry.Name;
+    }
+
+    /// <summary>Снимает отметку с найденной игры, соответствующей выключенной записи.</summary>
+    private void ClearGameSelection(AppEntry entry)
+    {
+        foreach (var game in _games)
+        {
+            if (ReferenceEquals(game.ExistingApp, entry))
+            {
+                game.IsSelected = false;
+            }
+        }
+    }
+
+    /// <summary>Ищет выключенную запись, соответствующую найденной игре (exe, папка или имя).</summary>
+    private DisabledApp? FindDisabledMatch(DetectedGame game)
+    {
+        if (_disabledApps.Count == 0)
+        {
+            return null;
+        }
+
+        var folderNorm = CommandLineUtil.NormalizePath(game.FolderPath);
+
+        foreach (var item in _disabledApps)
+        {
+            var exe = CommandLineUtil.ExtractExe(item.Entry.Cmd);
+            if (!string.IsNullOrEmpty(exe) && CommandLineUtil.IsInsideFolder(exe, game.FolderPath))
+            {
+                return item;
+            }
+
+            var workingDir = item.Entry.WorkingDir;
+            if (!string.IsNullOrWhiteSpace(workingDir) &&
+                (CommandLineUtil.NormalizePath(workingDir) == folderNorm ||
+                 CommandLineUtil.IsInsideFolder(workingDir, game.FolderPath)))
+            {
+                return item;
+            }
+        }
+
+        var gameNorm = GameMatcher.NormalizeName(game.Name);
+        if (gameNorm.Length == 0)
+        {
+            return null;
+        }
+
+        return _disabledApps.FirstOrDefault(item =>
+            GameMatcher.NormalizeName(item.Entry.Name) == gameNorm);
     }
 
     private void AddManualEntry()
@@ -1313,9 +1694,51 @@ public sealed class MainForm : Form
 
         var coversDirectory = _coverService.GetCoversDirectory(_configPath);
         var added = 0;
+        var restored = 0;
 
         foreach (var game in _games.Where(g => g.Status == GameStatus.New && g.IsSelected))
         {
+            // Игра могла быть выключена раньше: возвращаем её запись из архива
+            // со всеми полями вместо создания дубликата.
+            if (FindDisabledMatch(game) is { } disabled)
+            {
+                var restoredEntry = disabled.Entry;
+
+                var oldExe = CommandLineUtil.ExtractExe(restoredEntry.Cmd);
+                if (game.SelectedCandidate is not null &&
+                    (string.IsNullOrWhiteSpace(oldExe) || !File.Exists(oldExe)))
+                {
+                    var args = CommandLineUtil.Split(restoredEntry.Cmd).Args;
+                    restoredEntry.Cmd = CommandLineUtil.Combine(game.SelectedCandidate.FullPath, args);
+
+                    if (string.IsNullOrWhiteSpace(restoredEntry.WorkingDir))
+                    {
+                        restoredEntry.WorkingDir = WorkingDirUtil.Resolve(
+                            _settingsService.Settings.WorkingDirMode,
+                            game.FolderPath,
+                            game.SelectedCandidate.FullPath);
+                    }
+                }
+
+                var restoreIndex = _disabledApps.IndexOf(disabled);
+                if (restoreIndex >= 0)
+                {
+                    _disabledApps.RemoveAt(restoreIndex);
+                }
+
+                var order = Math.Clamp(disabled.Order, 0, _config.Apps.Count);
+                _config.Apps.Insert(order, restoredEntry);
+
+                game.ExistingApp = restoredEntry;
+                game.Status = GameStatus.Existing;
+                game.IsSelected = false;
+                game.CoverPreviewPath = File.Exists(restoredEntry.ImagePath)
+                    ? restoredEntry.ImagePath
+                    : game.CoverPreviewPath;
+                restored++;
+                continue;
+            }
+
             var entry = game.Draft.Clone();
 
             if (string.IsNullOrWhiteSpace(entry.Uuid))
@@ -1356,7 +1779,7 @@ public sealed class MainForm : Form
             added++;
         }
 
-        if (added == 0)
+        if (added == 0 && restored == 0)
         {
             MessageBox.Show(this, "Ни одна игра не отмечена галочкой.", "Добавление",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1367,35 +1790,46 @@ public sealed class MainForm : Form
         RebuildConfigRows();
         RebuildGameRows();
         UpdateStatus();
-        _statusLabel.Text = $"Добавлено записей: {added}. Не забудьте сохранить конфиг.";
+
+        var parts = new List<string>();
+        if (added > 0)
+        {
+            parts.Add($"добавлено записей: {added}");
+        }
+
+        if (restored > 0)
+        {
+            parts.Add($"включено из архива: {restored}");
+        }
+
+        _statusLabel.Text = string.Join(", ", parts) + ". Не забудьте сохранить конфиг.";
     }
 
     // ------------------------------------------------------------- batch
 
     private List<DetectedGame>? GetBatchTargets(string action)
     {
-        var selected = _games
-            .Where(g => g.Status == GameStatus.New && g.IsSelected)
+        var selectable = _games
+            .Where(g => g.Status != GameStatus.NoExe)
             .ToList();
+
+        var selected = selectable.Where(g => g.IsSelected).ToList();
         if (selected.Count > 0)
         {
             return selected;
         }
 
-        var candidates = _games
-            .Where(g => g.Status != GameStatus.Existing)
-            .ToList();
-        if (candidates.Count == 0)
+        if (selectable.Count == 0)
         {
-            MessageBox.Show(this, "Нет новых игр для обработки.", "Пакетные действия",
+            MessageBox.Show(this, "Нет игр для обработки.", "Пакетные действия",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return null;
         }
 
         var result = MessageBox.Show(this,
-            $"Ни одна игра не отмечена. {action} для всех новых игр ({candidates.Count})?",
+            $"Ни одна игра не отмечена. {action} для всех новых и уже добавленных игр ({selectable.Count})?",
             "Пакетные действия", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        return result == DialogResult.Yes ? candidates : null;
+        return result == DialogResult.Yes ? selectable : null;
     }
 
     private async Task BatchEditSelectedGames()
@@ -1412,14 +1846,39 @@ public sealed class MainForm : Form
             return;
         }
 
+        var configChanged = false;
         foreach (var game in targets)
         {
-            var exe = game.SelectedCandidate?.FullPath ?? CommandLineUtil.ExtractExe(game.Draft.Cmd);
-            dialog.ApplyTo(game.Draft, game.FolderPath, exe);
+            // Уже сохранённая игра правит свою запись в конфиге, новая — черновик.
+            if (game.Status == GameStatus.Existing && game.ExistingApp is not null)
+            {
+                var exe = CommandLineUtil.ExtractExe(game.ExistingApp.Cmd);
+                if (string.IsNullOrWhiteSpace(exe))
+                {
+                    exe = game.SelectedCandidate?.FullPath;
+                }
+
+                dialog.ApplyTo(game.ExistingApp, game.FolderPath, exe);
+                configChanged = true;
+                continue;
+            }
+
+            var draftExe = game.SelectedCandidate?.FullPath ?? CommandLineUtil.ExtractExe(game.Draft.Cmd);
+            dialog.ApplyTo(game.Draft, game.FolderPath, draftExe);
         }
 
         var coverResult = ApplyBatchCoverAction(dialog, targets);
+        configChanged |= targets.Any(game => game.Status == GameStatus.Existing);
+
+        if (configChanged)
+        {
+            MarkDirty();
+            GameMatcher.Apply(_games, _config);
+            RebuildConfigRows();
+        }
+
         RebuildGameRows();
+        UpdateStatus();
 
         if (dialog.CoverAction == BatchCoverAction.FindOnline)
         {
@@ -1428,8 +1887,8 @@ public sealed class MainForm : Form
         }
 
         _statusLabel.Text =
-            $"Изменено черновиков: {targets.Count}{coverResult}. " +
-            "Не забудьте добавить записи и сохранить конфиг.";
+            $"Изменено записей: {targets.Count}{coverResult}. " +
+            (configChanged ? "Не забудьте сохранить конфиг." : "Не забудьте добавить записи и сохранить конфиг.");
     }
 
     private async Task BatchFindCoversAsync()
@@ -1463,6 +1922,7 @@ public sealed class MainForm : Form
         var noResult = 0;
         var errors = 0;
         var skipped = 0;
+        var configChanged = false;
 
         try
         {
@@ -1470,7 +1930,10 @@ public sealed class MainForm : Form
             {
                 token.ThrowIfCancellationRequested();
                 var game = targets[index];
-                var name = string.IsNullOrWhiteSpace(game.Draft.Name) ? game.Name : game.Draft.Name;
+                var entry = game.Status == GameStatus.Existing && game.ExistingApp is not null
+                    ? game.ExistingApp
+                    : game.Draft;
+                var name = string.IsNullOrWhiteSpace(entry.Name) ? game.Name : entry.Name;
                 _statusLabel.Text = $"Обложки {index + 1}/{targets.Count}: {name}";
 
                 if (string.IsNullOrWhiteSpace(name))
@@ -1488,8 +1951,13 @@ public sealed class MainForm : Form
                         continue;
                     }
 
-                    game.Draft.ImagePath = saved;
+                    entry.ImagePath = saved;
                     game.CoverPreviewPath = saved;
+                    if (game.Status == GameStatus.Existing)
+                    {
+                        configChanged = true;
+                    }
+
                     found++;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1504,7 +1972,15 @@ public sealed class MainForm : Form
         }
         catch (OperationCanceledException)
         {
+            if (configChanged)
+            {
+                MarkDirty();
+                GameMatcher.Apply(_games, _config);
+                RebuildConfigRows();
+            }
+
             RebuildGameRows();
+            UpdateStatus();
             _statusLabel.Text = "Поиск обложек отменён.";
             return;
         }
@@ -1513,7 +1989,15 @@ public sealed class MainForm : Form
             SetBatchBusy(false);
         }
 
+        if (configChanged)
+        {
+            MarkDirty();
+            GameMatcher.Apply(_games, _config);
+            RebuildConfigRows();
+        }
+
         RebuildGameRows();
+        UpdateStatus();
         _statusLabel.Text =
             $"Обложки: найдено {found}, без результата {noResult}, ошибок {errors}" +
             (skipped > 0 ? $", пропущено {skipped}" : string.Empty) + ".";
@@ -1523,23 +2007,27 @@ public sealed class MainForm : Form
 
     private List<AppEntry>? GetConfigTargets(string action)
     {
-        if (_config is null || _config.Apps.Count == 0)
+        var active = _config?.Apps ?? new List<AppEntry>();
+        var disabled = _disabledApps.Select(item => item.Entry).ToList();
+        var all = active.Concat(disabled).ToList();
+
+        if (all.Count == 0)
         {
             MessageBox.Show(this, "В конфиге нет записей для обработки.", "Пакетные действия",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return null;
         }
 
-        var selected = _config.Apps.Where(entry => entry.IsSelected).ToList();
+        var selected = all.Where(entry => entry.IsSelected).ToList();
         if (selected.Count > 0)
         {
             return selected;
         }
 
         var result = MessageBox.Show(this,
-            $"Ни одна запись не отмечена. {action} для всех записей ({_config.Apps.Count})?",
+            $"Ни одна запись не отмечена. {action} для всех записей ({all.Count})?",
             "Пакетные действия", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        return result == DialogResult.Yes ? _config.Apps.ToList() : null;
+        return result == DialogResult.Yes ? all : null;
     }
 
     private async Task BatchEditConfigEntries()
@@ -1683,17 +2171,39 @@ public sealed class MainForm : Form
 
     private void SetAllConfigSelected(bool selected)
     {
-        if (_config is null)
+        if (_config is null && _disabledApps.Count == 0)
         {
             return;
         }
 
-        foreach (var entry in _config.Apps)
+        foreach (var entry in _config is null ? Enumerable.Empty<AppEntry>() : _config.Apps)
         {
             entry.IsSelected = selected;
         }
 
+        foreach (var disabled in _disabledApps)
+        {
+            disabled.Entry.IsSelected = selected;
+        }
+
         RebuildConfigRows();
+        UpdateStatus();
+    }
+
+    /// <summary>Отмечает или снимает отметки у видимых игр (новых и уже добавленных).</summary>
+    private void SetAllGamesSelected(bool selected)
+    {
+        foreach (var game in _games.Where(MatchesFilter))
+        {
+            var selectable = game.Status == GameStatus.Existing ||
+                             (game.Status == GameStatus.New && game.Candidates.Count > 0);
+            if (selectable)
+            {
+                game.IsSelected = selected;
+            }
+        }
+
+        RebuildGameRows();
         UpdateStatus();
     }
 
@@ -1714,15 +2224,19 @@ public sealed class MainForm : Form
 
         foreach (var game in games)
         {
+            var entry = game.Status == GameStatus.Existing && game.ExistingApp is not null
+                ? game.ExistingApp
+                : game.Draft;
+
             if (dialog.CoverAction == BatchCoverAction.Clear)
             {
-                game.Draft.ImagePath = string.Empty;
+                entry.ImagePath = string.Empty;
                 game.CoverPreviewPath = null;
                 changed++;
                 continue;
             }
 
-            var name = string.IsNullOrWhiteSpace(game.Draft.Name) ? game.Name : game.Draft.Name;
+            var name = string.IsNullOrWhiteSpace(entry.Name) ? game.Name : entry.Name;
             if (string.IsNullOrWhiteSpace(name))
             {
                 continue;
@@ -1731,7 +2245,7 @@ public sealed class MainForm : Form
             try
             {
                 var saved = _coverService.SaveCover(dialog.CoverFilePath, coversDirectory, name);
-                game.Draft.ImagePath = saved;
+                entry.ImagePath = saved;
                 game.CoverPreviewPath = saved;
                 changed++;
             }
@@ -1842,6 +2356,16 @@ public sealed class MainForm : Form
         _batchCancelButton.Visible = busy;
         _configCancelButton.Visible = busy;
         UseWaitCursor = busy;
+
+        if (busy)
+        {
+            _disableConfigButton.Enabled = false;
+            _enableConfigButton.Enabled = false;
+        }
+        else
+        {
+            UpdateConfigToggleButtons();
+        }
     }
 
     // ------------------------------------------------------------- status
@@ -1857,19 +2381,24 @@ public sealed class MainForm : Form
         var existingCount = _games.Count(g => g.Status == GameStatus.Existing);
         var noExeCount = _games.Count(g => g.Status == GameStatus.NoExe);
         var selectedCount = _games.Count(g => g.Status == GameStatus.New && g.IsSelected);
+        var configCount = _config?.Apps.Count ?? 0;
+        var disabledCount = _disabledApps.Count;
+
+        var archivePart = disabledCount > 0 ? $", выключено: {disabledCount}" : string.Empty;
 
         if (_games.Count == 0)
         {
             _statusLabel.Text = _config is null
                 ? "Выберите конфиг и папку с играми, затем нажмите «Сканировать»."
-                : $"Конфиг: {(_configPath ?? "новый")} (записей: {_config.Apps.Count}). Папка не просканирована.";
+                : $"Конфиг: {(_configPath ?? "новый")} (записей: {configCount}{archivePart}). " +
+                  "Папка не просканирована.";
         }
         else
         {
             _statusLabel.Text =
                 $"Новых: {newCount}   Уже в конфиге: {existingCount}   Без exe: {noExeCount}" +
                 $"   |   Конфиг: {(_configPath is null ? "новый" : Path.GetFileName(_configPath))}" +
-                $" (записей: {_config?.Apps.Count ?? 0})";
+                $" (записей: {configCount}{archivePart})";
         }
 
         _addButton.Text = $"Добавить отмеченные ({selectedCount})";
@@ -1877,7 +2406,16 @@ public sealed class MainForm : Form
         _saveButton.Enabled = _config is not null;
         _saveAsButton.Enabled = _config is not null;
 
+        _disableConfigButton.Enabled = _config?.Apps.Any(entry => entry.IsSelected) ?? false;
+        _enableConfigButton.Enabled = _disabledApps.Any(item => item.Entry.IsSelected);
+
         UpdateTitle();
+    }
+
+    private void UpdateConfigToggleButtons()
+    {
+        _disableConfigButton.Enabled = _config?.Apps.Any(entry => entry.IsSelected) ?? false;
+        _enableConfigButton.Enabled = _disabledApps.Any(item => item.Entry.IsSelected);
     }
 
     protected override void OnLoad(EventArgs e)

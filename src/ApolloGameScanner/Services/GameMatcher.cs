@@ -19,7 +19,6 @@ public static class GameMatcher
 
             game.ExistingApp = match;
             game.Status = GameStatus.Existing;
-            game.IsSelected = false;
 
             var exe = CommandLineUtil.ExtractExe(match.Cmd);
             var candidate = game.Candidates.FirstOrDefault(c =>

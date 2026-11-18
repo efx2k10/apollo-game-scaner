@@ -174,14 +174,20 @@ public sealed class GameRowControl : UserControl
                 _ => Color.DimGray,
             };
 
-            _check.Enabled = Game.Status == GameStatus.New && Game.Candidates.Count > 0;
-            _check.Checked = Game.Status == GameStatus.Existing || Game.IsSelected;
+            // Отмечать можно и новые игры (для добавления), и уже сохранённые
+            // в конфиге (для пакетных действий с их записями).
+            var selectable = Game.Status == GameStatus.Existing ||
+                             (Game.Status == GameStatus.New && Game.Candidates.Count > 0);
+            _check.Enabled = selectable;
+            _check.Checked = selectable && Game.IsSelected;
 
             _toolTip.SetToolTip(_check, Game.Status switch
             {
-                GameStatus.Existing => "Игра уже есть в конфиге — повторно не добавляется.",
+                GameStatus.Existing => "Отметить игру для пакетных действий с её записью в конфиге.",
                 GameStatus.NoExe => "Исполняемые файлы не найдены или исключены шаблонами.",
-                _ => "Добавить игру в конфиг.",
+                _ => Game.Candidates.Count > 0
+                    ? "Отметить игру для добавления в конфиг и пакетных действий."
+                    : "Нет подходящих exe — отметить нельзя.",
             });
 
             _exeBox.BeginUpdate();
